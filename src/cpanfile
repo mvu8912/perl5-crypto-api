@@ -1,0 +1,4 @@
+#vim: syntax=perl
+
+requires 'Moo';
+requires 'HTTP::API::Client';

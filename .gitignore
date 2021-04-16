@@ -1,0 +1,11 @@
+.prove/
+local/
+*.sw?
+perltidy.LOG
+perltidy.ERR
+.DS_Store
+.vagrant
+.bash_history
+.cpanm
+tools/init.log
+Crypto-API-*

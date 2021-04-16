@@ -1,0 +1,26 @@
+version: '3.3'
+services:
+    setup:
+        image: michaelpc/openshift:latest
+        user: root
+        volumes:
+            - cpanfiles:/app/cpanfiles
+        command: chmod 0700 -R /app && chown 1000 -R /app
+    app:
+        image: michaelpc/openshift:latest
+        working_dir: /app/src
+        volumes:
+            - ./src:/app/src
+        environment:
+            - IF_IN_RUN_0000000020=00
+            - OTHER_CPANFILES=/app/src/cpanfile
+            - PERL_CARTON_PATH=/app/cpanfile
+            - DEBUG_RESPONSE_IF_FAIL=1
+            - DEBUG_IN_OUT=0
+            - DEBUG_SEND_OUT=0
+            - DEBUG_RESPONSE=0
+            - DEBUG_RESPONSE_HEADER_ONLY=0
+            - RETRY_FAIL_RESPONSE=5
+            - RETRY_DELAY=5
+volumes:
+    cpanfiles:
