@@ -11,6 +11,7 @@ services:
         working_dir: /app/src
         volumes:
             - ./src:/app/src
+            - cpanfiles:/app/cpanfiles
         environment:
             - IF_IN_RUN_0000000020=00
             - OTHER_CPANFILES=/app/src/cpanfile
