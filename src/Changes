@@ -19,3 +19,10 @@
     + Don't Include undefined value
 
     + Verify the action from the row filter
+
+2021-12-04 - v0.05
+    + Support multiple layers of response data grabbing
+
+    + Support using dot notation for the key
+
+    + Support sorting the rows of result with multiple fields

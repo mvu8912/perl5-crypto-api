@@ -1,0 +1,8 @@
+version: '3.3'
+services:
+    setup:
+        image: michaelpc/openshift:latest
+        user: root
+        volumes:
+            - cpanfiles:/app/cpanfiles
+        command: chmod 0700 -R /app && chown 1000 -R /app
