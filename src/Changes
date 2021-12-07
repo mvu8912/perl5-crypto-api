@@ -37,3 +37,8 @@
     + Increase stability
 
     + Simplify Code
+
+2021-12-07 - v0.06.01
+    + Bugfixes
+        + Fix type checks
+        + Fix response process
