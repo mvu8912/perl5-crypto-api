@@ -171,8 +171,13 @@ sub _call_function {
                 }
             }
             elsif ($type =~ m/int/i) {
-                if (defined($value) && $value !~ /^[\d\.]+$/) {
+                if (defined($value) && $value !~ /^\d+$/) {
                     die "$my_alias should be integer";
+                }
+            }
+            elsif ($type =~ m/num/i) {
+                if (defined($value) && $value !~ /^\d*(|\.\d+)$/) {
+                    die "$my_alias should be a number";
                 }
             }
             elsif ($type =~ m/bool/i) {
@@ -181,7 +186,7 @@ sub _call_function {
                 }
             }
             elsif ($type =~ m/hex/i) {
-                if (defined($value) && $value !~ /^[0-9a0-f]$/i) {
+                if (defined($value) && $value !~ /^[0-9a0-f]+$/i) {
                     die "$my_alias should be hexadecimal";
                 }
             }
@@ -489,9 +494,15 @@ sub _map_response_attr {
         my $attr;
 
         if ( ref $from_exchange eq 'HASH' ) {
-            my @attr = $self->_process_response( $row, $from_exchange,
+            $attr = $self->_process_response( $row, $from_exchange,
                 request => $options{request} );
-            $attr = ref $from_exchange eq 'ARRAY' ? \@attr : $attr[0];
+        }
+        elsif ( ref $from_exchange eq 'ARRAY' ) {
+            $attr = [
+                $self->_process_response(
+                    $row, $from_exchange, request => $options{request}
+                )
+            ];
         }
         else {
             $attr = $row->{$from_exchange};
