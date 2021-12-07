@@ -128,13 +128,13 @@ sub _call_function {
     $events->{not_include} = {};
 
     while (my ($my_alias, $setting) = each %$data) {
-        my ($to_exchange, $required, $default, $include, $checker);
+        my ($to_exchange, $type, $required, $default, $include, $checker);
 
         if (ref $setting eq 'HASH') {
             $to_exchange = $setting->{field_name}
                 or die "Missing setting: field_name";
-            ($required, $default, $include, $checker) =
-            @$setting{qw(required default include checker)};
+            ($type, $required, $default, $include, $checker) =
+            @$setting{qw(type required default include checker)};
         }
         else {
             $to_exchange = $setting;
@@ -145,16 +145,16 @@ sub _call_function {
         my $value = $o{$my_alias};
 
         if (!defined $value) {
-            if ($required) {
-                die "Missing argument: $my_alias";
-            }
-            elsif ($default) {
+            if ($default) {
                 if (ref $default eq 'CODE') {
                     $value = $self->$default($my_alias, $setting);
                 }
                 else {
                     $value = $default;
                 }
+            }
+            if ($required && !defined $value) {
+                die "Missing argument: $my_alias";
             }
         }
 
@@ -164,13 +164,36 @@ sub _call_function {
             $value = $self->$format($value);
         }
 
+        if ($type) {
+            if (ref $type eq 'ARRAY') {
+                if (defined($value) && !grep {ref ? $value =~ /$_/ : $value eq $_} @$type) {
+                    die "the value is not in $my_alias enum list";
+                }
+            }
+            elsif ($type =~ m/int/i) {
+                if (defined($value) && $value !~ /^[\d\.]+$/) {
+                    die "$my_alias should be integer";
+                }
+            }
+            elsif ($type =~ m/bool/i) {
+                if (defined($value) && $value !~ /^[01]$/) {
+                    die "$my_alias should be boolean";
+                }
+            }
+            elsif ($type =~ m/hex/i) {
+                if (defined($value) && $value !~ /^[0-9a0-f]$/i) {
+                    die "$my_alias should be hexadecimal";
+                }
+            }
+        }
+
         if ($checker) {
             foreach my $c(@$checker) {
-                my $code = $c->{code}
-                    or die "$my_alias checker missing code";
+                my $code = $c->{ok}
+                    or die "$my_alias checker missing ok";
 
                 my $err = $c->{err}
-                    or die "$my_alias is message error message";
+                    or die "$my_alias is missing err";
 
                 local $_ = $value;
 
@@ -233,38 +256,31 @@ sub _call_function {
         return $debug;
     }
 
-    my $resp_specs = ref $resp_spec eq 'ARRAY' ? $resp_spec : [$resp_spec];
+    return $self->_process_response(
+        $self->json_response,
+        $resp_spec,
+        request => {
+            method  => $method,
+            path    => $path,
+            data    => $data,
+            headers => $headers,
+            events  => $events,
+        }
+    );
+}
+
+sub _process_response {
+    my ($self, $response, $resp_specs, %options) = @_;
+
+    my ($method, $path, $data, $headers, $events) = @{$options{request}}{qw(
+         method  path    data   headers   events)};
+
+    $resp_specs = [$resp_specs] if ref $resp_specs ne 'ARRAY';
 
     my @result = ();
 
-    foreach my $resp_spec(@$resp_specs) {
-        my $resp = _get($self->json_response, $resp_spec->{key});
-
-        my $row_spec = $resp_spec->{row};
-
-        my $response_attr = sub {
-            my ($row) = @_;
-            my %mapped_row;
-            my @other_keys = @{$row_spec->{_others} || []};
-            while (my ($my_alias, $from_exchange) = each %$row_spec) {
-                next if $my_alias =~ m/^_/;
-                my $attr = $row->{$from_exchange};
-                my $attr_func = "response_attr_$my_alias";
-                if ($self->can($attr_func)) {
-                    $attr = $self->$attr_func($attr, $row);
-                }
-                $mapped_row{$my_alias} = $attr;
-            }
-            foreach my $key(@other_keys) {
-                my $attr = $row->{$key};
-                my $attr_func = "response_attr_$key";
-                if ($self->can($attr_func)) {
-                    $attr = $self->$attr_func($attr, $row);
-                }
-                $mapped_row{_others}{$key} = $attr;
-            }
-            return %mapped_row;
-        };
+    SPEC: foreach my $resp_spec(@$resp_specs) {
+        my $resp = _get($response, $resp_spec->{key});
 
         if (my $code = $resp_spec->{raw_process}) {
             push @result, $self->$code(
@@ -277,78 +293,107 @@ sub _call_function {
                 },
                 response => $resp,
             );
-            next;
+            next SPEC;
         }
 
-        if (ref $resp eq 'ARRAY') {
-            my @mapped_rows;
-            foreach my $row(@$resp) {
-                my %mapped_row = $response_attr->($row);
-                if (my $filter = $resp_spec->{row_filter}) {
-                    my $action = $self->$filter(\%mapped_row) || '';
-                    if ($action && $action !~ m/^(next|last)$/) {
-                        die "Row Filter returns expected either 'next' or 'last' or '' or undef";
-                    }
-                    if ($action eq 'next') {
-                        next;
-                    }
-                    elsif ($action eq 'last') {
-                        last;
-                    }
-                }
-                push @mapped_rows, \%mapped_row;
-            }
-
-            if (my $sort = $resp_spec->{sort}) {
-                @mapped_rows = sort { $self->$sort($a, $b) } @mapped_rows;
-            }
-
-            if (my $primary_key = $resp_spec->{array2hash}) {
-                my %mapped_rows = map { $_->{$primary_key} => $_ } @mapped_rows;
-                if (my $code = $resp_spec->{post_row}) {
-                    map { $self->$code($_, \%mapped_rows) } @mapped_rows;
-                }
-                push @result, \%mapped_rows;
-            }
-            elsif (my $pri_key = $resp_spec->{'array2[hash]'}) {
-                my %mapped_rows = ();
-                foreach my $row(@mapped_rows) {
-                    push @{$mapped_rows{$row->{$pri_key}} ||= []}, $row;
-                }
-
-                if (my $sort = $resp_spec->{'array2[hash.sort]'}) {
-                    foreach my $list(values %mapped_rows) {
-                        @$list = sort { $self->$sort($a, $b) } @$list;
-                    }
-                }
-
-                if (my $code = $resp_spec->{post_row}) {
-                    map { $self->$code($_, \%mapped_rows) } @mapped_rows;
-                }
-                push @result, \%mapped_rows;
-            }
-            elsif (my $code = $resp_spec->{post_row}) {
-                map { $self->$code($_, \@mapped_rows) } @mapped_rows;
-            }
-
-            if (my $sort = $resp_spec->{sort_by}) {
-                @mapped_rows = _sort_rows($sort, @mapped_rows);
-            }
-
-            push @result, \@mapped_rows;
+        if (!ref $resp) {
+            push @result, $resp;
+            next SPEC;
         }
-        else {
-            my %mapped_row = $response_attr->($resp);
+        elsif (ref $resp eq 'HASH') {
+            my %mapped_row = $self->_map_response_attr($resp, row_spec => $resp_spec->{row});
+
+            if (my $code = $resp_spec->{post_row}) {
+                $self->$code(\%mapped_row, $resp);
+            }
+
+            push @result, \%mapped_row;
+            next SPEC;
+        }
+
+        my @mapped_rows;
+        my %mapped_rows;
+
+        ROW: foreach my $row(@$resp) {
+            my %mapped_row = $self->_map_response_attr($row, row_spec => $resp_spec->{row});
 
             if (my $code = $resp_spec->{post_row}) {
                 $self->$code(\%mapped_row);
             }
 
-            push @result, \%mapped_row;
+            if (my $filter = $resp_spec->{row_filter}) {
+                my $action = $self->$filter(\%mapped_row, $row) || '';
+                if ($action && $action !~ m/^(next|last)$/) {
+                    die "Row Filter returns expected either 'next' or 'last' or '' or undef";
+                }
+                if ($action eq 'next') {
+                    next ROW;
+                }
+                elsif ($action eq 'last') {
+                    last ROW;
+                }
+            }
+
+            if (my $primary_key = $resp_spec->{array2hash}) {
+                eval _hash_key(
+                    head   => '$mapped_rows',
+                    path   => $primary_key,
+                    tail   => ' = \\%mapped_row',
+                    source => \%mapped_row,
+                );
+            }
+            elsif (my $pri_key = $resp_spec->{'array2[hash]'}) {
+                eval _hash_key(
+                    head   => 'push @{$mapped_rows',
+                    path   => $pri_key,
+                    tail   => ' ||= []}, \\%mapped_row',
+                    source => \%mapped_row,
+                );
+            }
+
+            die $@ if $@;
+
+            push @mapped_rows, \%mapped_row
+                if !%mapped_rows;
         }
+
+        if (%mapped_rows) {
+            push @result, \%mapped_rows;
+            next SPEC;
+        }
+
+        if (my $csort = $resp_spec->{custom_sort}) {
+            @mapped_rows = sort { $self->$csort($a, $b) } @mapped_rows;
+        }
+        elsif (my $sort = $resp_spec->{sort_by}) {
+            @mapped_rows = _sort_rows($sort, @mapped_rows);
+        }
+
+        push @result, \@mapped_rows;
     }
 
     return wantarray ? @result : $result[0];
+}
+
+sub _hash_key {
+    my %options = @_;
+
+    my $head   = $options{head} // '$_';
+    my $path   = $options{path} or die 'Missing path';
+    my $tail   = $options{tail} // '';
+    my $source = $options{source};
+
+    if (ref $path eq 'ARRAY') {
+        my @path = @$path; ## clone
+        return sprintf '%s%s%s',
+            $head,
+            join('', map { $_ = _defor(_get($source, $_), '') if $source;
+                s/'/\\'/g; "{'$_'}" } @path),
+            $tail;
+    }
+
+    $path =~ s/'/\\'/g;
+    return sprintf "%s{'%s'}%s", $head, $path, $tail;
 }
 
 sub _sort_rows {
@@ -429,6 +474,45 @@ sub _get {
     }
 
     return $data;
+}
+
+sub _map_response_attr {
+    my ($self, $row, %options) = @_;
+
+    my $row_spec = $options{row_spec};
+
+    my %mapped_row;
+
+    while (my ($my_alias, $from_exchange) = each %$row_spec) {
+        next if $my_alias =~ m/^_/ || $from_exchange eq '[X]';
+
+        my $attr;
+
+        if ( ref $from_exchange eq 'HASH' ) {
+            my @attr = $self->_process_response( $row, $from_exchange,
+                request => $options{request} );
+            $attr = ref $from_exchange eq 'ARRAY' ? \@attr : $attr[0];
+        }
+        else {
+            $attr = $row->{$from_exchange};
+        }
+
+        if (my $code = $self->can("response_attr_$my_alias")) {
+            $attr = $self->$code($attr, $row);
+        }
+
+        $mapped_row{$my_alias} = $attr;
+    }
+
+    foreach my $key(@{$row_spec->{_others} || []}) {
+        my $attr = $row->{$key};
+        if (my $code = $self->can("response_attr_$key")) {
+            $attr = $self->$code($attr, $row);
+        }
+        $mapped_row{_others}{$key} = $attr;
+    }
+
+    return %mapped_row;
 }
 
 sub DEMOLISH {}

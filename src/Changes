@@ -26,3 +26,14 @@
     + Support using dot notation for the key
 
     + Support sorting the rows of result with multiple fields
+
+2021-12-05 - v0.06
+    + Support multiple levels of response data
+
+    + Add request data types e.g. (int, bool, hex, enum)
+
+    + Add request data custom checker
+
+    + Increase stability
+
+    + Simplify Code

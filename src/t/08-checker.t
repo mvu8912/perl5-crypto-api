@@ -35,8 +35,8 @@ use Crypto::API;
                     field_name => 'symbol',
                     checker => [
                         {
-                            code => sub { /XRP/ },
-                            err  => 'only support XRP',
+                            ok  => sub { /XRP/ },
+                            err => 'only support XRP',
                         },
                     ],
                 },
